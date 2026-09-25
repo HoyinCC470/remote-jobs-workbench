@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>远程岗位工作台</title>
+<meta name="description" content="远程岗位收集工作台：每 6 小时自动同步多源远程岗位">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23FF4F00'/%3E%3Crect x='7' y='14' width='18' height='4' fill='%23FAFAF7'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<link rel="stylesheet" href="vendor/shoelace-cdn/themes/light.css">
+<script type="module">
+  // 显式注册页面用到的 Shoelace 组件；路径基于文档 baseURI，根路径与子路径部署均可用
+  const libBase = new URL("vendor/shoelace-cdn/", document.baseURI).href;
+  const { setBasePath } = await import(libBase + "utilities/base-path.js");
+  setBasePath(libBase); // sl-icon 图标库路径，必须先于组件注册设置
+  const comps = [
+    "input/input", "badge/badge", "button/button",
+    "select/select", "option/option",
+    "radio-group/radio-group", "radio/radio",
+    "details/details", "icon/icon", "divider/divider", "tag/tag",
+  ];
+  await Promise.allSettled(comps.map((c) => import(libBase + "components/" + c + ".js")));
+</script>
+<script src="vendor/chart.js/chart.umd.js"></script>
+<style>
+:root {
+  --paper: #FAFAF7;
+  --ink: #16181D;
+  --muted: #6F6D66;
+  --line: #E5E2DB;
+  --panel: #F1EFEA;
+  --accent: #FF4F00;
+  --accent-soft: #FFF0E8;
+  --font-mono: "IBM Plex Mono", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", monospace;
+  --font-body: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
+  /* 覆盖 Shoelace 组件内部字体 token，保证阴影 DOM 内文字不落入系统字体 */
+  --sl-font-sans: var(--font-body);
+  --sl-font-mono: var(--font-mono);
+  /* Shoelace 主题对齐信号橙 */
+  --sl-color-primary-50: #FFF0E8;
+  --sl-color-primary-100: #FFE0D1;
+  --sl-color-primary-200: #FFBFA3;
+  --sl-color-primary-300: #FF9A70;
+  --sl-color-primary-400: #FF7A45;
+  --sl-color-primary-500: #FF4F00;
+  --sl-color-primary-600: #E84600;
+  --sl-color-primary-700: #C03C00;
+  --sl-color-primary-800: #993000;
+  --sl-color-primary-900: #7A2600;
+  --sl-color-primary-950: #4D1800;
+  --sl-focus-ring-color: var(--accent);
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-x: clip;
+}
+.job-title, .hint, .job-index, .stat .cap { overflow-wrap: anywhere; }
+.mono { font-family: var(--font-mono); }
+
+/* ── 顶栏 ─────────────────────────── */
+.masthead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 40px 20px;
+  border-bottom: 1px solid var(--line);
+  background:
+    linear-gradient(90deg, transparent 0, transparent calc(100% - 1px), var(--line) calc(100% - 1px)),
+    var(--paper);
+}
+.brand h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+}
+.brand .kicker {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.brand .sync {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.masthead-filters {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex: 0 1 720px;
+}
+.masthead-filters sl-input { flex: 1 1 320px; }
+.masthead-filters .hero-select { flex: 0 0 170px; }
+.masthead sl-input::part(base) { background: #FFFFFF; }
+.masthead sl-input::part(form-control-label) { display: none; }
+
+/* ── 主体网格 ─────────────────────── */
+.workbench {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-height: calc(100vh - 96px);
+}
+.rail {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  padding: 24px 24px 48px;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow: hidden auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.rail-section + .rail-section { margin-top: 32px; }
+.rail-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 12px; }
+.stat .num {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.stat .num.accent { color: var(--accent); }
+.stat .cap {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  letter-spacing: 0.06em;
+}
+.stat.total { grid-column: 1 / -1; border-top: 1px dashed var(--line); padding-top: 14px; }
+.stat.total .num { font-size: 34px; }
+.chart-box { position: relative; height: 120px; }
+.chart-box canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
+.stat { min-width: 0; overflow: hidden; }
+.rail .hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.8;
+  border-top: 1px dashed var(--line);
+  padding-top: 16px;
+  margin-top: 28px;
+}
+
+/* ── 岗位主列 ─────────────────────── */
+.jobs-col { padding: 0 0 80px; min-width: 0; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 40px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  z-index: 5;
+}
+.toolbar .count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.toolbar .count strong { color: var(--ink); font-weight: 600; }
+.toolbar .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.toolbar .chips sl-tag { --sl-color-neutral-0: var(--accent-soft); }
+
+.job-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 0 20px;
+  padding: 22px 40px;
+  border-bottom: 1px solid var(--line);
+}
+.job-row:hover { background: #F6F4EF; }
+.job-index {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  padding-top: 5px;
+  letter-spacing: 0.06em;
+}
+.job-title {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.job-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; align-items: center; }
+.job-tags sl-badge { margin: 0; }
+.badge-company::part(base) { background: #FFFFFF; border: 1px solid var(--line); color: var(--ink); }
+.badge-cat::part(base) { background: var(--ink); color: var(--paper); border: 1px solid var(--ink); }
+.badge-region::part(base) { background: var(--accent-soft); color: #B33600; border: 1px solid #FFC9AD; }
+.field-block { margin-top: 10px; }
+.field-label {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.field-text {
+  margin: 0;
+  white-space: pre-line;
+  color: #3B3A36;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.field-text.clamp-3 { -webkit-line-clamp: 3; }
+.field-text.clamp-2 { -webkit-line-clamp: 2; }
+.field-empty { color: var(--muted); margin: 0; font-size: 13px; }
+.job-row sl-details { margin-top: 12px; }
+.job-row sl-details::part(header) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 0;
+}
+.job-row sl-details::part(content) { padding-top: 4px; }
+.job-row sl-details p { white-space: pre-line; margin: 0 0 12px; color: #3B3A36; }
+.job-row.expanded .field-text { -webkit-line-clamp: unset !important; display: block; }
+.expand-btn { margin-top: 10px; }
+.expand-btn sl-button::part(label) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.expand-btn sl-button:hover::part(label) { color: var(--accent); }
+.job-cta { padding-top: 3px; }
+.job-cta sl-button { --sl-font-size-small: 13px; }
+
+.list-end {
+  text-align: center;
+  padding: 32px 0 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.more-wrap { text-align: center; padding: 28px 0 0; }
+
+.empty-state { padding: 72px 40px; text-align: center; color: var(--muted); }
+.empty-state .big {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+/* ── 移动端 ─────────────────────── */
+@media (max-width: 900px) {
+  .masthead { flex-wrap: wrap; padding: 20px 20px 16px; }
+  .masthead-filters { flex: 1 1 100%; flex-wrap: wrap; }
+  .masthead-filters .hero-select { flex: 1 1 45%; }
+  .masthead-filters sl-input { flex: 1 1 100%; }
+  .workbench { grid-template-columns: minmax(0, 1fr); }
+  .rail {
+    position: static;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 20px;
+  }
+  .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 8px; }
+  .stat .num { font-size: 21px; }
+  .stat.total { grid-column: auto; border-top: 0; padding-top: 0; }
+  .stat.total .num { font-size: 21px; }
+  .rail-section + .rail-section { margin-top: 22px; }
+  .chart-box { height: 96px; }
+  .toolbar { padding: 12px 20px; flex-wrap: wrap; }
+  .job-row { grid-template-columns: minmax(0, 1fr); padding: 18px 20px; }
+  .job-index { padding: 0 0 6px; }
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="brand">
+    <span class="kicker">REMOTE / SYNC 6H</span>
+    <h1>远程岗位工作台</h1>
+    <span class="sync" id="syncInfo">数据加载中</span>
+  </div>
+  <div class="masthead-filters">
+    <sl-select id="filterCat" placeholder="全部职类" clearable size="large" class="hero-select">
+      <sl-icon name="briefcase-fill" slot="prefix"></sl-icon>
+    </sl-select>
+    <sl-select id="filterRegion" placeholder="全部地区" clearable size="large" class="hero-select">
+      <sl-icon name="funnel" slot="prefix"></sl-icon>
+    </sl-select>
+    <sl-input id="search" placeholder="搜索岗位、公司、关键词" size="large" clearable>
+      <sl-icon name="search" slot="prefix"></sl-icon>
+    </sl-input>
+  </div>
+</header>
+
+<div class="workbench">
+  <aside class="rail">
+    <section class="rail-section">
+      <h2 class="rail-title">运行状态</h2>
+      <div class="stat-grid">
+        <div class="stat"><div class="num accent" id="statToday">-</div><div class="cap">今日新增</div></div>
+        <div class="stat"><div class="num" id="stat7d">-</div><div class="cap">近 7 日</div></div>
+        <div class="stat total"><div class="num" id="statTotal">-</div><div class="cap">累计岗位</div></div>
+      </div>
+    </section>
+    <section class="rail-section">
+      <h2 class="rail-title">每日新增 · 14 天</h2>
+      <div class="chart-box"><canvas id="trendChart"></canvas></div>
+    </section>
+    <p class="hint">
+      数据源 8 站，每 6 小时自动同步。<br>
+      岗位仅展示名称、公司、职类、描述、需求、地区与投递链接。
+    </p>
+  </aside>
+
+  <main class="jobs-col">
+    <div class="toolbar">
+      <span class="count" id="resultCount">共 0 条</span>
+      <span class="chips" id="activeChips"></span>
+    </div>
+    <div id="jobList"></div>
+    <div class="more-wrap" id="moreWrap" hidden>
+      <sl-button variant="outline" size="medium" id="moreBtn">加载更多</sl-button>
+    </div>
+    <div class="list-end" id="listEnd" hidden>END OF LIST</div>
+    <div class="empty-state" id="emptyState" hidden>
+      <div class="big">没有匹配的岗位</div>
+      <div>调整搜索关键词或清除筛选条件</div>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
